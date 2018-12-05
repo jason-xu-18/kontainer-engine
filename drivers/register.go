@@ -6,6 +6,7 @@ import (
 	"github.com/rancher/kontainer-engine/drivers/gke"
 	"github.com/rancher/kontainer-engine/drivers/import"
 	"github.com/rancher/kontainer-engine/drivers/rke"
+	"github.com/rancher/kontainer-engine/drivers/oke"
 	"github.com/rancher/kontainer-engine/types"
 )
 
@@ -18,5 +19,6 @@ func init() {
 		"eks":    eks.NewDriver(),
 		"import": kubeimport.NewDriver(),
 		"rke":    rke.NewDriver(),
+		"oke":    oke.NewDriver(),
 	}
 }
