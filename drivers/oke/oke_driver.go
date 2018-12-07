@@ -6,11 +6,12 @@ import (
 
 	"github.com/oracle/oci-go-sdk/common"
 	"github.com/oracle/oci-go-sdk/containerengine"
-	"github.com/oracle/oci-go-sdk/example/helpers"
+	"github.com/oracle/oci-go-sdk/core"
 	"github.com/rancher/kontainer-engine/drivers/options"
 	"github.com/rancher/kontainer-engine/types"
 	"github.com/rancher/types/apis/management.cattle.io/v3"
 	"github.com/sirupsen/logrus"
+	
 	//"github.com/oracle/oci-go-sdk/example"
 )
 
@@ -129,6 +130,10 @@ func (d *Driver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFlags
 		Type:  types.StringType,
 		Usage: "The api key of the user",
 	}
+	driverFlag.Options["finger-print"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "The finger print of the user",
+	}
 	driverFlag.Options["labels"] = &types.Flag{
 		Type:  types.StringSliceType,
 		Usage: "The map of Kubernetes labels (key/value pairs) to be applied to each node",
@@ -163,25 +168,29 @@ func getStateFromOptions(driverOptions *types.DriverOptions) (state, error) {
 	state.Region = options.GetValueFromDriverOptions(driverOptions, types.StringType, "region").(string)
 	state.Name = options.GetValueFromDriverOptions(driverOptions, types.StringType, "name").(string)
 	state.ClusterCompartment = options.GetValueFromDriverOptions(driverOptions, types.StringType, "cluster-compartment").(string)
-	state.KubernetesVersionmaster = options.GetValueFromDriverOptions(driverOptions, types.StringType, "kubernetes-version", "kubernetesversionmaster").(string)
-	state.NetworkCompartment = options.GetValueFromDriverOptions(driverOptions, types.IntType, "network-compartment", "networkcompartment").(string)
-	state.VcnID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "vcn-id", "vcnid").(string)
-	state.subnet1ID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "subnet1ID", "subnet1ID").(string)
-	state.subnet2ID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "subnet2ID", "subnet2ID").(string)
-	state.PodsCidr = options.GetValueFromDriverOptions(driverOptions, types.IntType, "pods-cidr", "osDiskSizeGb").(string)
-	state.ServicesCidr = options.GetValueFromDriverOptions(driverOptions, types.StringType, "service-cidr", "servicecidr").(string)
-	state.NodepoolName = options.GetValueFromDriverOptions(driverOptions, types.StringType, "nodepool-name", "nodepoolname").(string)
-	state.KubernetesVersionnode = options.GetValueFromDriverOptions(driverOptions, types.StringType, "kubernetes-versionnode", "kubernetesversionnode").(string)
-	state.NodeImagename = options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-image", "nodeimage").(string)
-	state.NodeShape = options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-shape", "nodeshape").(string)
-	state.NodeSubnetIDs = options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-subnetid", "nodesubnetid").(string)
-	state.QuantityPerSubnet = options.GetValueFromDriverOptions(driverOptions, types.StringType, "quantity-persubnet", "qualitypersubnet").(string)
-	state.nodesshpublickey = options.GetValueFromDriverOptions(driverOptions, types.StringType, "ssh-key", "sshkey").(string)
-	state.initialNodeLabels = options.GetValueFromDriverOptions(driverOptions, types.StringType, "initial-nodelabel", "initiallabels").(string)
-	for _, part := range tagValues.Value {
+	state.KubernetesVersion = options.GetValueFromDriverOptions(driverOptions, types.StringType, "kubernetes-version").(string)
+	state.NetworkCompartment = options.GetValueFromDriverOptions(driverOptions, types.StringType, "network-compartment").(string)
+	state.Vcn = options.GetValueFromDriverOptions(driverOptions, types.StringType, "vcn").(string)
+	state.Subnets = options.GetValueFromDriverOptions(driverOptions, types.StringSliceType, "subnets").(*types.StringSlice)
+	for _, Subnet := range Subnets {
+		state.Subnets = append(Subnets, Subnet)
+	}
+	state.ServicesCidr = options.GetValueFromDriverOptions(driverOptions, types.StringType, "service-cidr").(string)
+	state.PodsCidr = options.GetValueFromDriverOptions(driverOptions, types.IntType, "pods-cidr").(string)
+	state.NodePoolName = options.GetValueFromDriverOptions(driverOptions, types.StringType, "nodepool-name").(string)
+	state.KubernetesVersionNode = options.GetValueFromDriverOptions(driverOptions, types.StringType, "kubernetes-versionnode").(string)
+	state.NodeImageName = options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-image").(string)
+	state.NodeShape = options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-shape").(string)
+	state.NodeSubnets = options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-subnets").(string)
+	state.QuantityPerSubnet = options.GetValueFromDriverOptions(driverOptions, types.StringType, "quantity-persubnet").(string)
+	state.NodeSshKey = options.GetValueFromDriverOptions(driverOptions, types.StringType, "ssh-key").(string)
+	state.ApiKey = options.GetValueFromDriverOptions(driverOptions, types.StringType, "api-key").(string)
+	state.FingerPrint = options.GetValueFromDriverOptions(driverOptions, types.StringType, "finger-print").(string)
+	labelValues : = options.GetValueFromDriverOptions(driverOptions, types.StringSliceType, "labels").(*types.StringSlice)
+	for _, part := range labelValues.Value {
 		kv := strings.Split(part, "=")
 		if len(kv) == 2 {
-			state.Tag[kv[0]] = kv[1]
+			state.labels[kv[0]] = kv[1]
 		}
 	}
 	return state, state.validate()
@@ -191,25 +200,31 @@ func (state *state) validate() error {
 	if state.Name == "" {
 		return fmt.Errorf("cluster name is required")
 	}
+	
+	if state.TenancyID == "" {
+		return fmt.Errorf("Tenancy ID is required")
+	}
+	
+	if state.UserID == "" {
+		return fmt.Errorf("User ID is required")
+	}
+	
+	if state.Region == "" {
+		return fmt.Errorf("Region is required")
+	}
 
 	if state.ClusterCompartmentID == "" {
-		return fmt.Errorf("OCID of the compartment is required")
+		return fmt.Errorf("Cluster Compartment OCID is required")
+	}
+	
+	if state.VCN == "" {
+		return fmt.Errorf("VCN name is required")
 	}
 
-	if state.VcnID == "" {
-		return fmt.Errorf("OCID of the virtual cloud network is required")
+	if state.ApiKey == "" {
+		return fmt.Errorf("Api key is required")
 	}
 
-	if state.KubernetesVersionmaster == "" {
-		return fmt.Errorf("the version of kubernetes is required")
-	}
-
-	if state.KubernetesVersionmaster == "" {
-		return fmt.Errorf("the version of kubernetes is required")
-	}
-	if state.KubernetesVersionmaster == "" {
-		return fmt.Errorf("the version of kubernetes is required")
-	}
 	return nil
 }
 
@@ -227,27 +242,33 @@ func getState(info *types.ClusterInfo) (state, error) {
 
 func (d *Driver) Create(ctx context.Context, opts *types.DriverOptions, _ *types.ClusterInfo) (*types.ClusterInfo, error) {
 	
-	tenancy :="ocid1.tenancy.oc1..aaaaaaaashw7efstoxf6v46gevtascttepw3l3d6xxx4gziexn5sxnldyhja"
-	user := "ocid1.user.oc1..aaaaaaaaa4j4sumd2v6glfaup6fbfibiudtfayrc7zpgzyuss7qa2d4ey6xa"
-	region := "us-phoenix-1"
-	fingerprint := "4d:63:7d:16:9c:bd:4d:db:64:0a:92:2a:45:85:f6:73"
-	homeFolder := getHomeFolder()
-	keyfile := path.Join(homeFolder, ".oci", "oci_simon_api_key.pem")
-	b, err := ioutil.ReadFile(keyfile)
+	logrus.Infof("Starting create")
+	
+	state, err := getStateFromOptions(options)
 	if err != nil {
-        fmt.Print(err)
-    }
-	privateKey := string(b)
-	fmt.Println("privateKey:", privateKey)
-	provider :=common.NewRawConfigurationProvider(tenancy, user, region, fingerprint, privateKey, nil)
+		return nil, fmt.Errorf("error parsing state: %v", err)
+	}
+	
 	ctx := context.Background()
-	c, err := identity.NewIdentityClientWithConfigurationProvider(provider)
+	log.Infof("tenancy: %s" + state.TenancyID)
+	log.Infof("user: %s" + state.UserID)
+	log.Infof("region: %s" + state.Region)
+	log.Infof("tenancy: %s" + state.FingerPrint)
+	log.Infof("apikey: %s" + state.ApiKey)
+	provider :=common.NewRawConfigurationProvider(state.TenancyID, state.UserID, state.Region, state.FingerPrint, state.ApiKey, nil)
+	
+	identityClient, err := identity.NewIdentityClientWithConfigurationProvider(provider)
 	if err != nil {
-		fmt.Println("Error:", err)
-		return
+		return nil, fmt.Errorf("error creating identity client: %v", err)
 	}
 
-	c, err := containerengine.NewContainerEngineClientWithConfigurationProvider(common.DefaultConfigProvider())
+	containerEngineClient, err := containerengine.NewContainerEngineClientWithConfigurationProvider(provider)
+	if err != nil {
+		return nil, fmt.Errorf("error creating Container Engine client: %v", err)
+	}
+	
+	//create vcn
+	vcn := CreateOrGetVcn(ctx,provider)
 	state, err := getStateFromOptions(options)
 	Name := state.Name
 	CompartmentId := state.ClusterCompartmentID
@@ -277,4 +298,47 @@ func (d *Driver) Update(ctx context.Context, opts *types.DriverOptions, _ *types
 	updateReq.kubernetesVersion = state.KubernetesVersionmaster
 	updateResp, err := c.UpdateCluster(ctx, updateReq)
 	fmt.Println("updating cluster")
+}
+
+
+
+
+
+// CreateOrGetVcn either creates a new Virtual Cloud Network (VCN) or get the one already exist
+func CreateOrGetVcn(ctx context.Context,provider common.ConfigurationProvider,state state) core.Vcn {
+	c, err := core.NewVirtualNetworkClientWithConfigurationProvider(provider)
+	if err != nil {
+		return nil, fmt.Errorf("error creating VirtualNetworkClient: %v", err)
+	}
+
+	vcnItems := listVcns(ctx, c)
+	
+	for _, element := range vcnItems {
+				if *element.DisplayName == state.Vcn {
+				// VCN already created, return it
+				return element
+		}
+	}
+	
+
+	// create a new VCN
+	request := core.CreateVcnRequest{}
+	if state.ServicesCidr =="" {
+		request.CidrBlock = common.String("10.96.0.0/16")
+	}else {
+		request.CidrBlock = common.String(state.ServicesCidr)
+	}
+	if state.NetworkCompartment =="" {
+		request.CompartmentId = common.String(state.ClusterCompartment)
+	}else {
+		request.CompartmentId = common.String(state.NetworkCompartment)
+	}
+	request.DisplayName = common.String(state.Vcn)
+	request.DnsLabel = common.String("vcndns")
+
+	r, err := c.CreateVcn(ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("error creating VCN: %v", err)
+	}
+	return r.Vcn
 }
