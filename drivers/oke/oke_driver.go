@@ -23,6 +23,9 @@ type state struct {
 	// Cluster Name
 	Name string
 
+	// Cluster Id
+	ID string
+
 	// Cluster info
 	ClusterInfo types.ClusterInfo
 }
@@ -145,14 +148,42 @@ func (d *Driver) GetDriverUpdateOptions(ctx context.Context) (*types.DriverFlags
 	driverFlag := types.DriverFlags{
 		Options: make(map[string]*types.Flag),
 	}
+	driverFlag.Options["cluster-id"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "cluster ocid",
+	}
+	driverFlag.Options["tenancy-ocid"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "the OCID of the tenancy",
+	}
+	driverFlag.Options["user-ocid"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "the OCID of the user",
+	}
+	driverFlag.Options["region"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "resource region",
+		value: "us-phoenix-1",
+	}
+	driverFlag.Options["api-key"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "The api key of the user",
+	}
+	driverFlag.Options["finger-print"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "The finger print of the user",
+	}
+	driverFlag.Options["name"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "the name of the cluster that should be displayed to the user",
+	}
+	driverFlag.Options["cluster-compartment"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "the cluster compartment in which the cluster exists",
+	}
 	driverFlag.Options["kubernetes-version"] = &types.Flag{
 		Type:  types.StringType,
 		Usage: "Version of Kubernetes specified when creating the managed cluster",
-		value: "v1.11.5",
-	}
-	driverFlag.Options["kubernetes-versionnode"] = &types.Flag{
-		Type:  types.StringType,
-		Usage: "version of Kubernetes running on the nodes in the node pool",
 		value: "v1.11.5",
 	}
 	return &driverFlag, nil
@@ -161,6 +192,7 @@ func (d *Driver) GetDriverUpdateOptions(ctx context.Context) (*types.DriverFlags
 // SetDriverOptions implements driver interface
 func getStateFromOptions(driverOptions *types.DriverOptions) (state, error) {
 	state := state{}
+	state.ID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "cluster-id").(string)
 	state.TenancyID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "tenancy-ocid").(string)
 	state.UserID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "user-ocid").(string)
 	state.Region = options.GetValueFromDriverOptions(driverOptions, types.StringType, "region").(string)
@@ -215,10 +247,6 @@ func (state *state) validate() error {
 		return fmt.Errorf("Cluster Compartment OCID is required")
 	}
 
-	if state.VCN == "" {
-		return fmt.Errorf("VCN name is required")
-	}
-
 	if state.ApiKey == "" {
 		return fmt.Errorf("Api key is required")
 	}
@@ -238,6 +266,22 @@ func getState(info *types.ClusterInfo) (state, error) {
 	return state, err
 }
 
+func storeState(info *types.ClusterInfo, state state) error {
+	data, err := json.Marshal(state)
+
+	if err != nil {
+		return err
+	}
+
+	if info.Metadata == nil {
+		info.Metadata = map[string]string{}
+	}
+
+	info.Metadata["state"] = string(data)
+
+	return nil
+}
+
 func (d *Driver) Create(ctx context.Context, opts *types.DriverOptions, _ *types.ClusterInfo) (*types.ClusterInfo, error) {
 
 	logrus.Infof("Starting create")
@@ -247,11 +291,10 @@ func (d *Driver) Create(ctx context.Context, opts *types.DriverOptions, _ *types
 		return nil, fmt.Errorf("error parsing state: %v", err)
 	}
 
-	ctx := context.Background()
 	logrus.Infof("tenancy: %s", state.TenancyID)
 	logrus.Infof("user: %s", state.UserID)
 	logrus.Infof("region: %s", state.Region)
-	logrus.Infof("tenancy: %s", state.FingerPrint)
+	logrus.Infof("finerPrint: %s", state.FingerPrint)
 	logrus.Infof("apikey: %s", state.ApiKey)
 	provider := common.NewRawConfigurationProvider(state.TenancyID, state.UserID, state.Region, state.FingerPrint, state.ApiKey, nil)
 
@@ -317,6 +360,8 @@ func (d *Driver) Create(ctx context.Context, opts *types.DriverOptions, _ *types
 	logrus.Infof("cluster created")
 	clusterID := getResourceID(workReqResp.Resources, containerengine.WorkRequestResourceActionTypeCreated, "CLUSTER")
 
+	state.ID = clusterID
+
 	// create NodePool
 	createNodePoolReq := containerengine.CreateNodePoolRequest{}
 	createNodePoolReq.CompartmentId = common.String(state.ClusterCompartment)
@@ -349,12 +394,130 @@ func (d *Driver) Create(ctx context.Context, opts *types.DriverOptions, _ *types
 
 func (d *Driver) Update(ctx context.Context, opts *types.DriverOptions, _ *types.ClusterInfo) (*types.ClusterInfo, error) {
 
+	logrus.Infof("Starting update")
+
+	state, err := getState(info)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing state: %v", err)
+	}
+
+	newState, err := getStateFromOptions(options)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing state: %v", err)
+	}
+
+	logrus.Infof("tenancy: %s", newState.TenancyID)
+	logrus.Infof("user: %s", newState.UserID)
+	logrus.Infof("region: %s", newState.Region)
+	logrus.Infof("finerPrint: %s", newState.FingerPrint)
+	logrus.Infof("apikey: %s", newState.ApiKey)
+	provider := common.NewRawConfigurationProvider(newState.TenancyID, newState.UserID, newState.Region, newState.FingerPrint, newState.ApiKey, nil)
+
+	containerEngineClient, err := containerengine.NewContainerEngineClientWithConfigurationProvider(provider)
+	if err != nil {
+		return nil, fmt.Errorf("error creating Container Engine client: %v", err)
+	}
+
 	updateReq := containerengine.UpdateClusterRequest{}
-	updateReq.Name = state.Name
-	updateReq.ClusterId = state.ClusterCompartmentID
-	updateReq.kubernetesVersion = state.KubernetesVersionmaster
-	updateResp, err := c.UpdateCluster(ctx, updateReq)
-	fmt.Println("updating cluster")
+	updateReq.ClusterId = newState.ID
+	getReq := containerengine.GetClusterRequest{
+		ClusterId: updateReq.ClusterId,
+	}
+	getResp, err := containerEngineClient.GetCluster(ctx, getReq)
+	if newState.Name != "" {
+		updateReq.Name = newState.Name
+	}
+	if newState.KubernetesVersion != "" {
+		updateReq.kubernetesVersion = newState.KubernetesVersion
+	}
+
+	updateResp, err := containerEngineClient.UpdateCluster(ctx, updateReq)
+	if err != nil {
+		return nil, fmt.Errorf("error update cluster: %v", err)
+	}
+	logrus.Infof("updating cluster")
+
+	// wait until update complete
+	workReqResp := waitUntilWorkRequestComplete(containerEngineClient, updateResp.OpcWorkRequestId)
+	logrus.Infof("cluster updated")
+	state.Name = newState.Name
+	state.ID = newState.ID
+	state.KubernetesVersion = newState.KubernetesVersion
+	return info, storeState(info, state)
+}
+
+func (d *Driver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*types.ClusterInfo, error) {
+	state, err := getState(info)
+	if err != nil {
+		return nil, err
+	}
+
+	logrus.Infof("tenancy: %s", newState.TenancyID)
+	logrus.Infof("user: %s", newState.UserID)
+	logrus.Infof("region: %s", newState.Region)
+	logrus.Infof("finerPrint: %s", newState.FingerPrint)
+	logrus.Infof("apikey: %s", newState.ApiKey)
+	provider := common.NewRawConfigurationProvider(newState.TenancyID, newState.UserID, newState.Region, newState.FingerPrint, newState.ApiKey, nil)
+
+	containerEngineClient, err := containerengine.NewContainerEngineClientWithConfigurationProvider(provider)
+	if err != nil {
+		return nil, fmt.Errorf("error creating Container Engine client: %v", err)
+	}
+
+	getReq := containerengine.GetClusterRequest{
+		ClusterId: state.ID,
+	}
+
+	cluster, err := containerEngineClient.GetCluster(ctx, getReq)
+	if err != nil {
+		return nil, err
+	}
+
+	info.Endpoint = *cluster.Endpoints
+	info.Version = *cluster.KubernetesVersion
+	//	info.Username = cluster.MasterAuth.Username
+	//	info.Password = cluster.MasterAuth.Password
+	//	info.RootCaCertificate = cluster.MasterAuth.ClusterCaCertificate
+	//	info.ClientCertificate = cluster.MasterAuth.ClientCertificate
+	//	info.ClientKey = cluster.MasterAuth.ClientKey
+	//	info.NodeCount = cluster.CurrentNodeCount
+	//	info.Metadata["nodePool"] = cluster.NodePools[0].Name
+	//	serviceAccountToken, err := generateServiceAccountTokenForGke(cluster)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	info.ServiceAccountToken = serviceAccountToken
+	return info, nil
+}
+
+// Remove implements driver interface
+func (d *Driver) Remove(ctx context.Context, info *types.ClusterInfo) error {
+	state, err := getState(info)
+	if err != nil {
+		return err
+	}
+
+	logrus.Infof("tenancy: %s", state.TenancyID)
+	logrus.Infof("user: %s", state.UserID)
+	logrus.Infof("region: %s", state.Region)
+	logrus.Infof("finerPrint: %s", state.FingerPrint)
+	logrus.Infof("apikey: %s", state.ApiKey)
+	provider := common.NewRawConfigurationProvider(state.TenancyID, state.UserID, state.Region, state.FingerPrint, state.ApiKey, nil)
+
+	containerEngineClient, err := containerengine.NewContainerEngineClientWithConfigurationProvider(provider)
+	if err != nil {
+		return nil, fmt.Errorf("error creating Container Engine client: %v", err)
+	}
+	
+	deleteReq := containerengine.DeleteClusterRequest{
+		ClusterId: state。ID,
+	}
+
+	containerEngineClient.DeleteCluster(ctx, deleteReq)
+
+	logrus.Infof("deleting cluster")
+
+	return nil
 }
 
 // CreateOrGetVcn either creates a new Virtual Cloud Network (VCN) or get the one already exist
