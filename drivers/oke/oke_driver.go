@@ -520,6 +520,102 @@ func (d *Driver) Remove(ctx context.Context, info *types.ClusterInfo) error {
 	return nil
 }
 
+func (d *Driver) GetCapabilities(ctx context.Context) (*types.Capabilities, error) {
+	return &d.driverCapabilities, nil
+}
+
+func (d *Driver) GetVersion(ctx context.Context, info *types.ClusterInfo) (*types.KubernetesVersion, error) {
+	logrus.Info("updating Kubernete version")
+
+	state, err := getState(info)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing state: %v", err)
+	}
+
+	newState, err := getStateFromOptions(options)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing state: %v", err)
+	}
+
+	logrus.Infof("tenancy: %s", newState.TenancyID)
+	logrus.Infof("user: %s", newState.UserID)
+	logrus.Infof("region: %s", newState.Region)
+	logrus.Infof("finerPrint: %s", newState.FingerPrint)
+	logrus.Infof("apikey: %s", newState.ApiKey)
+	provider := common.NewRawConfigurationProvider(newState.TenancyID, newState.UserID, newState.Region, newState.FingerPrint, newState.ApiKey, nil)
+
+	containerEngineClient, err := containerengine.NewContainerEngineClientWithConfigurationProvider(provider)
+	if err != nil {
+		return nil, fmt.Errorf("error creating Container Engine client: %v", err)
+	}
+
+	updateReq := containerengine.UpdateClusterRequest{}
+	updateReq.ClusterId = newState.ID
+	getReq := containerengine.GetClusterRequest{
+		ClusterId: updateReq.ClusterId,
+	}
+	getResp, err := containerEngineClient.GetCluster(ctx, getReq)
+
+	version := &types.KubernetesVersion{Version: getResp.Cluster.KubernetesVersion}
+
+	return version, nil
+}
+
+func (d *Driver) SetVersion(ctx context.Context, info *types.ClusterInfo, version *types.KubernetesVersion) error {
+	logrus.Info("updating Kubernete version")
+
+	state, err := getState(info)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing state: %v", err)
+	}
+
+	newState, err := getStateFromOptions(options)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing state: %v", err)
+	}
+
+	logrus.Infof("tenancy: %s", newState.TenancyID)
+	logrus.Infof("user: %s", newState.UserID)
+	logrus.Infof("region: %s", newState.Region)
+	logrus.Infof("finerPrint: %s", newState.FingerPrint)
+	logrus.Infof("apikey: %s", newState.ApiKey)
+	provider := common.NewRawConfigurationProvider(newState.TenancyID, newState.UserID, newState.Region, newState.FingerPrint, newState.ApiKey, nil)
+
+	containerEngineClient, err := containerengine.NewContainerEngineClientWithConfigurationProvider(provider)
+	if err != nil {
+		return nil, fmt.Errorf("error creating Container Engine client: %v", err)
+	}
+
+	updateReq := containerengine.UpdateClusterRequest{}
+	updateReq.ClusterId = newState.ID
+	getReq := containerengine.GetClusterRequest{
+		ClusterId: updateReq.ClusterId,
+	}
+	getResp, err := containerEngineClient.GetCluster(ctx, getReq)
+	if newState.Name != "" {
+		updateReq.Name = newState.Name
+	}
+	if newState.KubernetesVersion != "" {
+		updateReq.kubernetesVersion = newState.KubernetesVersion
+	}
+
+	updateResp, err := containerEngineClient.UpdateCluster(ctx, updateReq)
+	if err != nil {
+		return nil, fmt.Errorf("error update cluster: %v", err)
+	}
+	logrus.Infof("updating cluster")
+
+	// wait until update complete
+	workReqResp := waitUntilWorkRequestComplete(containerEngineClient, updateResp.OpcWorkRequestId)
+	logrus.Infof("cluster updated")
+	state.Name = newState.Name
+	state.ID = newState.ID
+	state.KubernetesVersion = newState.KubernetesVersion
+	return info, storeState(info, state)
+
+	return nil
+}
+
 // CreateOrGetVcn either creates a new Virtual Cloud Network (VCN) or get the one already exist
 func CreateOrGetVcn(ctx context.Context, provider common.ConfigurationProvider, state state) (core.Vcn, error) {
 	c, err := core.NewVirtualNetworkClientWithConfigurationProvider(provider)
