@@ -18,6 +18,9 @@ type Driver struct {
 	driverCapabilities types.Capabilities
 }
 type state struct {
+	
+	types.UnimplementedClusterSizeAccess
+	
 	v3.OracleKubernetesEngineConfig
 
 	// Cluster Name
